@@ -1,234 +1,140 @@
-# Converge: A Human-AI Developed Programming Language for Neuromorphic Engineering
+# Converge
 
-![Converge Logo](https://scontent-sjc3-1.xx.fbcdn.net/v/t39.30808-6/446810553_465330955903871_5169344379290393766_n.jpg?_nc_cat=103&ccb=1-7&_nc_sid=5f2048&_nc_ohc=hHzPPQBeMxIQ7kNvgEowdu_&_nc_ht=scontent-sjc3-1.xx&oh=00_AYDvhl-A2_CmNS7ir2_3hF4rgdvK_s4s1jlD25WvQvDwHQ&oe=6661A5F7)
+Converge is a **time‑first programming language + toolchain** for building **hybrid neuromorphic–classical systems**: spiking networks, event streams, synaptic plasticity, and the host code that orchestrates them.
 
-## [![View the Presentation](https://www.beautiful.ai/assets/images/logo/logo-social.png)](https://www.beautiful.ai/player/-NzLQMdwOURGGmM_XAev)
+It’s inspired by the *whole‑stack audacity* of projects like TempleOS/HolyC — not in aesthetics, but in ethos:
 
-## Overview
+- **One coherent stack** you can hold in your head: language → compiler → IR → simulator → hardware backends.
+- **Explicitness over magic**: time, units, delays, learning rules, and IO are first‑class.
+- **Inspectable artifacts**: compilation emits human‑readable IR and deterministic reports.
 
-**Converge** is a high-level, declarative programming language designed specifically for developing and implementing neuromorphic computing systems. It abstracts away the complexities of the underlying hardware, allowing developers to focus on creating efficient and effective neuromorphic applications.
+Status: **pre‑α** (this repo is the start of the compiler/runtime).
 
-## Key Features
+---
 
-1. **Neural Abstraction**: Converge provides an intuitive and straightforward way to define, configure, and interact with spiking neural networks. Developers can express large-scale neuromorphic systems in a high-level, abstract manner, while the language ensures the appropriate low-level translations to leverage the capabilities of neuromorphic hardware.
+## Why this exists
 
-2. **Neuromorphic Hardware Optimization**: Converge integrates hardware-specific optimizations, enabling seamless and efficient use of various neuromorphic hardware architectures like Intel’s Loihi, which powers their new Hala Point system.
+Neuromorphic systems are arriving as **heterogeneous fabrics** (digital SNN chips, mixed‑signal accelerated-time systems, event-based sensors, and hybrid cloud access), and they increasingly live inside **classical control loops**. The painful part is not “writing a network” — it’s:
 
-3. **Time-driven Execution**: As spiking neural networks operate in a time-dependent fashion, Converge adopts a time-driven execution model. Developers define the temporal dynamics of the system, and the language handles the intricate scheduling and simulation.
+- **Time semantics** (discrete vs event-driven; delays; scheduling).
+- **Hardware partitioning** (what runs on the host vs the neuromorphic fabric).
+- **Interchange** between ecosystems (simulation, training, deployment).
+- **Reproducibility** (randomness, quantization, routing constraints, and timing).
 
-4. **Plasticity Support**: Converge includes an extensive library of learning rules and mechanisms, supporting a wide range of synaptic and neuronal plasticity models. Users can also define their own custom plasticity rules.
+Converge’s bet: treat *time and events as the IR*, then compile down into whatever “fabric” you have.
 
-5. **Multi-modal Data Interaction**: Converge provides tools to easily convert and feed various types of data into neuromorphic systems. This includes traditional datasets, sensory data, or real-time streams.
+---
 
-6. **Simulation and Debugging Tools**: Converge includes a robust suite of tools for simulation, debugging, and performance analysis, allowing developers to rapidly prototype, test, and optimize their neuromorphic systems.
+## The Converge stack (current direction)
 
-7. **Interoperability**: Converge is designed to interoperate smoothly with existing machine learning frameworks like TensorFlow, PyTorch, or Keras. This enables developers to combine traditional neural networks with neuromorphic models in a single unified framework.
-
-## Benefits
-
-- **Enhanced Efficiency**: High performance for neuromorphic applications.
-- **Scalability**: Suitable for both small-scale and large-scale projects.
-- **Robustness**: Resilient to various types of adversarial attacks.
-- **Innovation in AI**: Facilitates groundbreaking research and development.
-- **Interdisciplinary Integration**: Bridges the gap between neuromorphic computing and other fields.
-
-## Sample Code 
-
+```mermaid
+flowchart LR
+  A["Converge source (.cv)"] --> B["Front-end (parse + units + checks)"]
+  B --> C["CVIR (Converge IR): typed event calculus"]
+  C --> D["Optimizer (sched/partition/cost models)"]
+  D --> E["Backends"]
+  E --> E1["sim (Rust)"]
+  E --> E2["nir export (interchange)"]
+  E --> E3["lava codegen (Loihi/Lava)"]
+  E --> E4["hw targets (THOR / SpiNNaker2 / BrainScaleS-2)"]
 ```
+
+**CVIR** is intentionally shaped to align with **NIR (Neuromorphic Intermediate Representation)** for ecosystem interchange.
+
+---
+
+## Language at a glance (fabric DSL)
+
+Converge’s “fabric” layer is declarative: you describe neuron models, populations, connectivity, learning rules, and time.
+
+```converge
 neuron LIF {
-    membrane_time_constant = 20 ms
-    threshold_voltage = 1.0 V
+  tau_m = 20 ms
+  v_th  = 1.0 V
 }
 
-layer Input[100] : LIF
+layer Input[100]  : LIF
 layer Hidden[300] : LIF
-layer Output[10] : LIF
+layer Output[10]  : LIF
 
-connect Input -> Hidden {
-    weight_distribution = Uniform(-1.0, 1.0)
-    delay_distribution = Normal(1.0 ms, 0.1 ms)
-    plasticity = STDP(alpha=0.1, beta=0.05, tau_plus=20 ms, tau_minus=20 ms)
-}
-
-connect Hidden -> Output {
-    weight_distribution = Uniform(-1.0, 1.0)
-    delay_distribution = Normal(1.0 ms, 0.1 ms)
-    plasticity = STDP(alpha=0.1, beta=0.05, tau_plus=20 ms, tau_minus=20 ms)
-}
-
-pattern stimulus[100] = TimeSeries("./data/input.csv")
-pattern labels[10] = TimeSeries("./data/labels.csv")
-
-apply stimulus -> Input
-
-train Output with labels
+connect Input  -> Hidden { w = Uniform(-1.0, 1.0)  d = Normal(1 ms, 0.1 ms) }
+connect Hidden -> Output { w = Uniform(-1.0, 1.0)  d = Normal(1 ms, 0.1 ms) }
 
 run for 1 s
 ```
-While this is a rudimentary example, more complex, real-world applications would use Converge to create large-scale, interconnected networks, feed in diverse data sources, and simulate the network’s behavior over time.
+
+**Important:** the compiler/runtime will ultimately support both *event-driven* and *clocked* execution, but the semantics will remain *time-explicit* in source and IR.
 
 ---
 
-## Quick Start Tutorial Guide
+## Quick start (today)
 
-### Setting up the Environment
+You need Rust (`rustc`/`cargo`).
 
-Firstly, ensure you have a compatible environment to run Converge. Check the official Converge documentation for setup and installation instructions.
-
-### Defining Neurons
-
-Neurons are the fundamental units of a neuromorphic system. In Converge, you define neurons with their unique properties like so:
+```bash
+cargo run -p converge-cli -- check examples/hello.cv
+cargo run -p converge-cli -- ast   examples/hello.cv
 ```
-neuron LIF {
-    membrane_time_constant = 20 ms
-    threshold_voltage = 1.0 V
-}
-```
-This creates a layer named Input with 100 LIF neurons.
-
-### Applying Patterns 
-
-You can apply stimulus patterns to layers:
-```
-pattern stimulus[100] = TimeSeries("./data/input.csv")
-apply stimulus -> Input
-```
-
-### Running The Simulation
-
-Finally, to run the simulation:
-```
-run for 1 s
-```
----
-
-## Exploiting Neuromorphic Systems with Neurological Disorder-Inspired Attacks
-
-### Main Section
-
-Neuromorphic computing, with its inspiration drawn from human neural networks, presents a unique set of challenges and vulnerabilities. One of the most exciting yet challenging avenues of this field is the emulation of disordered neurological phenomena for the purposes of testing, improving, and securing neuromorphic architectures. Below are prime examples of attacks inspired by various neurological disorders, each employing distinct attack vectors like malware, DDoS attacks, false data injection, rollbacks, and packet sniffing.
-
-#### 1. Mimicking Schizophrenia: Chaos & Confusion
-
-##### Attack Strategy:
-- Deploying malware that introduces erratic spike patterns similar to the disordered thinking observed in schizophrenia.
-- Generating DDoS attacks that mimic the overwhelming sensory input associated with hallucinations.
-
-Sample Code in Converge:
- ```
-malware SchizoMalware {
-    erratic_spike("TargetLayer", "./data/erratic_spike.csv")
-    DDoS("TargetLayer", 1000, "sensory_hallucination")
-}
-```
-##### Potential Impact:
-- Systems overwhelmed with disorganized data, leading to false decisions.
-- Resource exhaustion due to handling hallucinatory-like DDoS attacks.
-
-
-### 2. Emulating Alzheimer’s: Memory Degradation
-
-##### Attack Strategy:
-- Injecting false data into memory storage components to mimic memory loss.
-- Manipulating saved states and forcing rollbacks to simulate cognitive decline.
-
-Sample Code in Converge:
-```
-malware AlzheimerMalware {
-    inject_false_data("MemoryLayer", "./data/false_data.csv")
-    force_rollback("MemoryLayer", "saved_state_1")
-}
-```
-##### Potential Impact:
-- Information corruption leading to faulty decision-making.
-- Rollbacks causing loss of crucial data and system state, mimicking cognitive decline.
-
-
-### 3. Simulating Bipolar Disorder & Mania: Extreme Oscillations
-
-##### Attack Strategy:
-- Using packet sniffing to intercept data and then injecting extreme values to make the system oscillate between states, resembling bipolar mood swings.
-- Introducing malware that forces the neuromorphic system into cycles of high and low activity, simulating mania and depression.
-
-Sample Code in Converge:
-```
-malware BipolarMalware {
-    sniff_and_inject("DataChannel", "./data/extreme_values.csv")
-    activity_cycle("ProcessingLayer", "high", "low")
-}
-```
-##### Potential Impact:
-- System oscillation causing hardware stress and potential failure.
-- Erratic behavior leading to inconsistent and unreliable outputs.
-
-
-### 4. Replicating Psychosis & Depression: Altered Reality & Inactivity
-
-##### Attack Strategy:
-- Injecting false data streams to alter the system’s perception of reality, akin to psychosis.
-- Introducing low-energy states or inactivity cycles to mimic depressive episodes.
-
-Sample Code in Converge:
-```
-malware PsychosisDepressionMalware {
-    inject_reality("PerceptionLayer", "./data/false_reality.csv")
-    induce_low_energy("ProcessingLayer")
-}
-```
-##### Potential Impact:
-- Altered data causing incorrect decisions based on false reality.
-- System inactivity leading to resource wastage and failure to respond to actual stimuli.
 
 ---
 
-## Future Directions
+## Scope (what Converge is / isn’t)
 
-Converge aims to push the boundaries of neuromorphic computing with future innovations such as:
+Converge is not “yet another Python SNN library”. It’s a **compiler toolchain** meant to:
 
-	•	Enhanced support for other neuromorphic hardware platforms
-	•	Advanced AI and machine learning integrations
-	•	Expanded adversarial attack simulations
-	•	Broader community engagement and collaboration
+- Represent neuromorphic programs in a **hardware-agnostic** but *timing-precise* IR.
+- **Partition** across a host CPU/GPU and neuromorphic fabric (hybrid arrays).
+- Emit **multiple deployment targets** (simulators, interchange formats, vendor SDKs).
+
+Converge does *not* try to replace existing ML ecosystems. Instead it aims to be the missing bridge layer:
+source → IR → (NIR/Lava/…).
+
+---
+
+## Ecosystem alignment (bleeding edge references)
+
+Hardware and platforms Converge is designed to target (over time):
+
+- **Intel Loihi 2 / Hala Point** neuromorphic system (Loihi 2–based, large-scale SNN hardware).
+- **SpiNNaker2** (many-core, event-driven neuromorphic platform; e.g., SpiNNcloud deployments).
+- **BrainScaleS‑2** (mixed-signal neuromorphic with accelerated-time dynamics).
+- **Neuromorphic Commons (THOR)**: shared access to neuromorphic systems for researchers.
+
+Software ecosystems Converge will interoperate with rather than replace:
+
+- **Lava** (Intel’s neuromorphic software framework).
+- **NIR (Neuromorphic Intermediate Representation)** as the interchange layer between frameworks/hardware.
+- **Nengo**, **Brian2**, **Norse**, **snnTorch** (simulation/training ecosystems Converge can exchange with via IR and codegen).
+
+See `docs/references.md` for links and short notes.
+See `docs/spec.md` for the current accepted grammar (pre‑α).
+
+---
+
+## Security & robustness (responsible research)
+
+Neuromorphic systems need the equivalent of “fuzzing + fault injection + timing adversaries”.
+Converge intends to support **pathology-inspired robustness testing** (e.g., timing jitter, spike corruption, routing congestion, state rollback) as *first-class simulation modes*.
+
+This is for defensive engineering and scientific study. No “malware DSL” lives here.
+
+---
+
+## Roadmap (high-level)
+
+- **0.1**: parser + AST + validation + stable diagnostics
+- **0.2**: CVIR + deterministic simulation kernel (LIF + basic synapses)
+- **0.3**: NIR export/import
+- **0.4**: Lava codegen backend (Loihi/Lava workflows)
+- **0.5**: partitioning + scheduling cost models (hybrid host/fabric)
 
 ---
 
 ## License
 
-Converge is licensed under the MIT License.
-
----
+MIT. See `LICENSE`.
 
 ## Contact
 
-Feel free to reach out: eros@blackdream.ai - or open an issue if you have any questions or suggestions. 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+Open an issue, or email eros@blackdream.ai.
 

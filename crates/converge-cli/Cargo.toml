@@ -1,0 +1,14 @@
+[package]
+name = "converge-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "converge"
+path = "src/main.rs"
+
+[dependencies]
+converge-lang = { path = "../converge-lang" }
+

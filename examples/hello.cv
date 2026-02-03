@@ -1,0 +1,12 @@
+neuron LIF {
+  tau_m = 20 ms
+  v_th  = 1.0 V
+}
+
+layer Input[4] : LIF
+layer Output[2] : LIF
+
+connect Input -> Output { w = Uniform(-1.0, 1.0) d = Normal(1 ms, 0.1 ms) }
+
+run for 10 ms
+

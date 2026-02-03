@@ -1,0 +1,5 @@
+neuron LIF { tau_m = 10 ms }
+
+layer X[1] : LIF
+layer X[2] : LIF
+
