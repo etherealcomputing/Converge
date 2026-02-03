@@ -65,7 +65,7 @@ cargo run -p converge-cli -- cvir  examples/hello.cv
 
 ## Origin
 
-Converge is conceived by Eros and it’s being built in open collaboration with AI tooling. You’ll see that stance in the artifacts. The repo is designed to be read, not just executed.
+Converge is conceived by Eros Marcello (founder of ethereal computing inc.) and it’s being built in open collaboration with AI tooling. You’ll see that stance in the artifacts. The repo is designed to be read, not just executed.
 
 ## Contributing
 
@@ -77,4 +77,4 @@ Read `SECURITY.md` for reporting. Converge will support defensive robustness tes
 
 ## License and contact
 
-MIT. See `LICENSE`. Open an issue or email eros@blackdream.ai.
+MIT. See `LICENSE`. Open an issue or email eros@etherealcomputing.com
