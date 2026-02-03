@@ -1,7 +1,7 @@
 <p align="center">
   <img src="assets/converge-logo-256.jpg" width="256" height="256" alt="Converge logo">
 </p>
-<h1 align="center">Converge</h1>
+<h1 align="center">Converge ❍</h1>
 <p align="center"><strong>A time first language and toolchain for hybrid neuromorphic classical systems.</strong></p>
 
 ## What Converge is
