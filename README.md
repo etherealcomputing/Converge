@@ -1,31 +1,35 @@
-# Converge
+<p align="center">
+  <img src="assets/converge-logo-256.jpg" width="256" height="256" alt="Converge logo">
+</p>
+<h1 align="center">Converge</h1>
+<p align="center"><strong>A time first language and toolchain for hybrid neuromorphic classical systems.</strong></p>
 
-Converge is a **time‑first programming language + toolchain** for building **hybrid neuromorphic–classical systems**: spiking networks, event streams, synaptic plasticity, and the host code that orchestrates them.
+## What Converge is
 
-It’s inspired by the *whole‑stack audacity* of projects like TempleOS/HolyC — not in aesthetics, but in ethos:
+Converge is a time first programming language and compiler toolchain for hybrid neuromorphic classical systems. It targets spiking networks event streams synaptic plasticity and the host code that orchestrates them.
 
-- **One coherent stack** you can hold in your head: language → compiler → IR → simulator → hardware backends.
-- **Explicitness over magic**: time, units, delays, learning rules, and IO are first‑class.
-- **Inspectable artifacts**: compilation emits human‑readable IR and deterministic reports.
+It’s built around a simple insistence. Time isn’t metadata, it’s the program. Converge treats events delays and units as first class so you can compile the same intent into simulation interchange and hardware backends without rewriting the meaning.
 
-Status: **pre‑α** (this repo is the start of the compiler/runtime).
+Converge emits a canonical intermediate form called CVIR and it’s being shaped to align with NIR for ecosystem interchange. It’s early. The direction is not.
 
----
+Status: pre alpha.
 
-## Why this exists
+## Thesis
 
-Neuromorphic systems are arriving as **heterogeneous fabrics** (digital SNN chips, mixed‑signal accelerated-time systems, event-based sensors, and hybrid cloud access), and they increasingly live inside **classical control loops**. The painful part is not “writing a network” — it’s:
+Neuromorphic systems don’t arrive as a single chip and a single SDK. They arrive as fabrics. You’ve got event based sensors, host control loops, routing constraints, quantization rules and timing jitter. If your program can’t name time precisely, you’ll be debugging folklore.
 
-- **Time semantics** (discrete vs event-driven; delays; scheduling).
-- **Hardware partitioning** (what runs on the host vs the neuromorphic fabric).
-- **Interchange** between ecosystems (simulation, training, deployment).
-- **Reproducibility** (randomness, quantization, routing constraints, and timing).
+Converge is not a Python SNN library replacement. It’s a compiler toolchain that makes time explicit, makes artifacts inspectable and keeps execution deterministic enough to ship.
 
-Converge’s bet: treat *time and events as the IR*, then compile down into whatever “fabric” you have.
+## Design principles
 
----
+1. Time is explicit in source and in IR.
+2. Units are part of meaning and they can’t be shrugged off.
+3. Determinism is a feature, not a nice to have.
+4. If you can’t inspect it, you can’t deploy it.
+5. Hardware comes later, semantics come first.
+6. Interop is mandatory, not aspirational.
 
-## The Converge stack (current direction)
+## Architecture
 
 ```mermaid
 flowchart LR
@@ -39,102 +43,38 @@ flowchart LR
   E --> E4["hw targets (THOR / SpiNNaker2 / BrainScaleS-2)"]
 ```
 
-**CVIR** is intentionally shaped to align with **NIR (Neuromorphic Intermediate Representation)** for ecosystem interchange.
+Today you’ve got the front end plus a validator and a CVIR JSON emitter. Next you’ll get a deterministic simulator core then an interchange pipeline and finally hardware codegen.
 
----
+## Quick start
 
-## Language at a glance (fabric DSL)
-
-Converge’s “fabric” layer is declarative: you describe neuron models, populations, connectivity, learning rules, and time.
-
-```converge
-neuron LIF {
-  tau_m = 20 ms
-  v_th  = 1.0 V
-}
-
-layer Input[100]  : LIF
-layer Hidden[300] : LIF
-layer Output[10]  : LIF
-
-connect Input  -> Hidden { w = Uniform(-1.0, 1.0)  d = Normal(1 ms, 0.1 ms) }
-connect Hidden -> Output { w = Uniform(-1.0, 1.0)  d = Normal(1 ms, 0.1 ms) }
-
-run for 1 s
-```
-
-**Important:** the compiler/runtime will ultimately support both *event-driven* and *clocked* execution, but the semantics will remain *time-explicit* in source and IR.
-
----
-
-## Quick start (today)
-
-You need Rust (`rustc`/`cargo`).
+You need Rust stable. Minimum supported Rust is 1.92.
 
 ```bash
+cargo test
 cargo run -p converge-cli -- check examples/hello.cv
 cargo run -p converge-cli -- ast   examples/hello.cv
+cargo run -p converge-cli -- cvir  examples/hello.cv
 ```
 
----
+## Docs
 
-## Scope (what Converge is / isn’t)
+1. `docs/spec.md` current accepted grammar and validation rules
+2. `docs/references.md` curated anchors for hardware and interchange
+3. `docs/voice.md` writing rules for project docs
+4. `docs/brand.md` logo and asset guidance
 
-Converge is not “yet another Python SNN library”. It’s a **compiler toolchain** meant to:
+## Origin
 
-- Represent neuromorphic programs in a **hardware-agnostic** but *timing-precise* IR.
-- **Partition** across a host CPU/GPU and neuromorphic fabric (hybrid arrays).
-- Emit **multiple deployment targets** (simulators, interchange formats, vendor SDKs).
+Converge is conceived by Eros and it’s being built in open collaboration with AI tooling. You’ll see that stance in the artifacts. The repo is designed to be read, not just executed.
 
-Converge does *not* try to replace existing ML ecosystems. Instead it aims to be the missing bridge layer:
-source → IR → (NIR/Lava/…).
+## Contributing
 
----
+Read `CONTRIBUTING.md` then pick something small and make it sharp. If you add syntax you’ll add tests and you’ll keep the IR stable.
 
-## Ecosystem alignment (bleeding edge references)
+## Security
 
-Hardware and platforms Converge is designed to target (over time):
+Read `SECURITY.md` for reporting. Converge will support defensive robustness testing and fault injection. It won’t ship offense code.
 
-- **Intel Loihi 2 / Hala Point** neuromorphic system (Loihi 2–based, large-scale SNN hardware).
-- **SpiNNaker2** (many-core, event-driven neuromorphic platform; e.g., SpiNNcloud deployments).
-- **BrainScaleS‑2** (mixed-signal neuromorphic with accelerated-time dynamics).
-- **Neuromorphic Commons (THOR)**: shared access to neuromorphic systems for researchers.
+## License and contact
 
-Software ecosystems Converge will interoperate with rather than replace:
-
-- **Lava** (Intel’s neuromorphic software framework).
-- **NIR (Neuromorphic Intermediate Representation)** as the interchange layer between frameworks/hardware.
-- **Nengo**, **Brian2**, **Norse**, **snnTorch** (simulation/training ecosystems Converge can exchange with via IR and codegen).
-
-See `docs/references.md` for links and short notes.
-See `docs/spec.md` for the current accepted grammar (pre‑α).
-
----
-
-## Security & robustness (responsible research)
-
-Neuromorphic systems need the equivalent of “fuzzing + fault injection + timing adversaries”.
-Converge intends to support **pathology-inspired robustness testing** (e.g., timing jitter, spike corruption, routing congestion, state rollback) as *first-class simulation modes*.
-
-This is for defensive engineering and scientific study. No “malware DSL” lives here.
-
----
-
-## Roadmap (high-level)
-
-- **0.1**: parser + AST + validation + stable diagnostics
-- **0.2**: CVIR + deterministic simulation kernel (LIF + basic synapses)
-- **0.3**: NIR export/import
-- **0.4**: Lava codegen backend (Loihi/Lava workflows)
-- **0.5**: partitioning + scheduling cost models (hybrid host/fabric)
-
----
-
-## License
-
-MIT. See `LICENSE`.
-
-## Contact
-
-Open an issue, or email eros@blackdream.ai.
-
+MIT. See `LICENSE`. Open an issue or email eros@blackdream.ai.

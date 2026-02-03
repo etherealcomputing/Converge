@@ -70,3 +70,7 @@ The `check` command enforces:
 `converge cvir <file>` emits a stable JSON representation of the parsed program (spans omitted).
 This is intentionally a stepping stone toward a future NIR-aligned interchange pipeline.
 
+## Docs
+
+1. `docs/voice.md` writing rules for project docs
+2. `docs/brand.md` logo and asset guidance

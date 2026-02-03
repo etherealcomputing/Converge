@@ -1,6 +1,6 @@
 # References (curated)
 
-This is a pragmatic, engineering‑oriented list of “anchor points” Converge cross‑references while shaping the language, IR, and backends.
+This is a pragmatic engineering oriented list of anchor points Converge cross references while shaping the language IR and backends. It’s not exhaustive. It’s curated around interoperability and deployment targets where primary sources exist.
 
 ## Hardware / platforms
 

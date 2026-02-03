@@ -1,6 +1,6 @@
 use crate::ast::*;
 use crate::diagnostic::{Diagnostic, Span};
-use crate::lexer::{lex, Token, TokenKind};
+use crate::lexer::{Token, TokenKind, lex};
 
 pub fn parse_program(src: &str) -> Result<Program, Diagnostic> {
     let tokens = lex(src)?;
@@ -38,8 +38,14 @@ impl<'a> Parser<'a> {
         t
     }
 
-    fn expect(&mut self, expected: fn(&TokenKind) -> bool, what: &'static str) -> Result<&'a Token, Diagnostic> {
-        let t = self.peek().ok_or_else(|| Diagnostic::new(format!("expected {what}, found end of input")))?;
+    fn expect(
+        &mut self,
+        expected: fn(&TokenKind) -> bool,
+        what: &'static str,
+    ) -> Result<&'a Token, Diagnostic> {
+        let t = self
+            .peek()
+            .ok_or_else(|| Diagnostic::new(format!("expected {what}, found end of input")))?;
         if expected(&t.kind) {
             Ok(self.bump().unwrap())
         } else {
@@ -117,7 +123,9 @@ impl<'a> Parser<'a> {
                 }
                 _ => {
                     let t = self.bump().unwrap();
-                    return Err(Diagnostic::new("unexpected token in block").with_span(t.span.clone()));
+                    return Err(
+                        Diagnostic::new("unexpected token in block").with_span(t.span.clone())
+                    );
                 }
             }
         }
@@ -125,7 +133,9 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_expr(&mut self) -> Result<Expr, Diagnostic> {
-        let t = self.peek().ok_or_else(|| Diagnostic::new("expected expression, found end of input"))?;
+        let t = self
+            .peek()
+            .ok_or_else(|| Diagnostic::new("expected expression, found end of input"))?;
         match &t.kind {
             TokenKind::Number(_) => Ok(Expr::Number(self.parse_quantity("number")?)),
             TokenKind::String(_) => {
@@ -280,7 +290,10 @@ mod tests {
     use super::parse_program;
     use crate::validate::validate;
 
-    const HELLO: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/hello.cv"));
+    const HELLO: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../examples/hello.cv"
+    ));
 
     #[test]
     fn parses_and_validates_example() {
@@ -297,6 +310,10 @@ layer X[1] : NoSuchNeuron
 
         let program = parse_program(src).expect("src should parse");
         let diags = validate(&program).expect_err("validation should fail");
-        assert!(diags.iter().any(|d| d.message.contains("unknown neuron type")));
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("unknown neuron type"))
+        );
     }
 }

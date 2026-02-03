@@ -63,10 +63,5 @@ pub fn validate(program: &Program) -> Result<(), Vec<Diagnostic>> {
         }
     }
 
-    if diags.is_empty() {
-        Ok(())
-    } else {
-        Err(diags)
-    }
+    if diags.is_empty() { Ok(()) } else { Err(diags) }
 }
-

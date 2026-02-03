@@ -133,7 +133,10 @@ impl<'a> Lexer<'a> {
                     break;
                 }
             }
-            if self.i + 1 < self.bytes.len() && self.bytes[self.i] == b'/' && self.bytes[self.i + 1] == b'/' {
+            if self.i + 1 < self.bytes.len()
+                && self.bytes[self.i] == b'/'
+                && self.bytes[self.i + 1] == b'/'
+            {
                 self.i += 2;
                 while self.i < self.bytes.len() && self.bytes[self.i] != b'\n' {
                     self.i += 1;
@@ -175,10 +178,8 @@ impl<'a> Lexer<'a> {
                         b'r' => s.push('\r'),
                         b't' => s.push('\t'),
                         _ => {
-                            return Err(Diagnostic::new("invalid string escape").with_span(Span::new(
-                                self.i.saturating_sub(2),
-                                self.i,
-                            )));
+                            return Err(Diagnostic::new("invalid string escape")
+                                .with_span(Span::new(self.i.saturating_sub(2), self.i)));
                         }
                     }
                 }
@@ -246,4 +247,3 @@ fn is_ident_start(b: u8) -> bool {
 fn is_ident_continue(b: u8) -> bool {
     is_ident_start(b) || b.is_ascii_digit()
 }
-

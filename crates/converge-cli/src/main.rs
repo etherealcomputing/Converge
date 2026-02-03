@@ -113,7 +113,7 @@ fn read_file(path: &str) -> String {
 fn print_usage() {
     eprintln!(
         "\
-converge — neuromorphic language toolchain (pre-α)
+converge: neuromorphic language toolchain (pre-α)
 
 USAGE:
   converge <command> <file>
