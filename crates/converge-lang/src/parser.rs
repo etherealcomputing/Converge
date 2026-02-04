@@ -58,7 +58,9 @@ impl<'a> Parser<'a> {
             Some(TokenKind::KwNeuron) => Ok(Item::Neuron(self.parse_neuron_def()?)),
             Some(TokenKind::KwLayer) => Ok(Item::Layer(self.parse_layer_def()?)),
             Some(TokenKind::KwConnect) => Ok(Item::Connect(self.parse_connect_def()?)),
+            Some(TokenKind::KwStimulus) => Ok(Item::Stimulus(self.parse_stimulus_def()?)),
             Some(TokenKind::KwRun) => Ok(Item::Run(self.parse_run_stmt()?)),
+            Some(TokenKind::KwSeed) => Ok(Item::Seed(self.parse_seed_stmt()?)),
             Some(_) => {
                 let t = self.bump().unwrap();
                 Err(Diagnostic::new("unexpected token at top-level").with_span(t.span.clone()))
@@ -100,7 +102,65 @@ impl<'a> Parser<'a> {
         self.expect(|k| matches!(k, TokenKind::KwRun), "`run`")?;
         self.expect(|k| matches!(k, TokenKind::KwFor), "`for`")?;
         let duration = self.parse_quantity("duration")?;
-        Ok(RunStmt { duration })
+        let step = if matches!(self.peek().map(|t| &t.kind), Some(TokenKind::KwStep)) {
+            self.bump();
+            Some(self.parse_quantity("step")?)
+        } else {
+            None
+        };
+        Ok(RunStmt { duration, step })
+    }
+
+    fn parse_seed_stmt(&mut self) -> Result<SeedStmt, Diagnostic> {
+        let kw = self.expect(|k| matches!(k, TokenKind::KwSeed), "`seed`")?;
+        let value = self.parse_u64("seed value")?;
+        Ok(SeedStmt {
+            value,
+            span: kw.span.clone(),
+        })
+    }
+
+    fn parse_stimulus_def(&mut self) -> Result<StimulusDef, Diagnostic> {
+        self.expect(|k| matches!(k, TokenKind::KwStimulus), "`stimulus`")?;
+        let layer = self.parse_ident("layer name")?;
+        self.expect(|k| matches!(k, TokenKind::Eq), "`=`")?;
+        let expr = self.parse_expr()?;
+        let call = match expr {
+            Expr::Call(call) => call,
+            _ => {
+                return Err(
+                    Diagnostic::new("expected stimulus model call").with_span(layer.span.clone())
+                );
+            }
+        };
+        let model = match call.name.name.as_str() {
+            "Poisson" => {
+                let mut rate = None;
+                for arg in call.args {
+                    if let CallArg::Named { name, value } = arg
+                        && name.name == "rate"
+                    {
+                        match value {
+                            Expr::Number(q) => rate = Some(q),
+                            _ => {
+                                return Err(Diagnostic::new("rate must be a quantity")
+                                    .with_span(name.span.clone()));
+                            }
+                        }
+                    }
+                }
+                let rate = rate.ok_or_else(|| {
+                    Diagnostic::new("Poisson stimulus requires rate").with_span(layer.span.clone())
+                })?;
+                StimulusModel::Poisson { rate }
+            }
+            _ => {
+                return Err(
+                    Diagnostic::new("unknown stimulus model").with_span(call.name.span.clone())
+                );
+            }
+        };
+        Ok(StimulusDef { layer, model })
     }
 
     fn parse_assign_block(&mut self) -> Result<Vec<Assign>, Diagnostic> {
@@ -111,7 +171,7 @@ impl<'a> Parser<'a> {
                     self.bump();
                     break;
                 }
-                TokenKind::Ident(_) => {
+                TokenKind::Ident(_) | TokenKind::KwRate => {
                     let key = self.parse_ident("field name")?;
                     self.expect(|k| matches!(k, TokenKind::Eq), "`=`")?;
                     let value = self.parse_expr()?;
@@ -145,7 +205,7 @@ impl<'a> Parser<'a> {
                 };
                 Ok(Expr::String(s))
             }
-            TokenKind::Ident(_) => {
+            TokenKind::Ident(_) | TokenKind::KwRate => {
                 let ident = self.parse_ident("identifier")?;
                 if matches!(self.peek().map(|t| &t.kind), Some(TokenKind::LParen)) {
                     Ok(Expr::Call(self.parse_call_after_name(ident)?))
@@ -169,7 +229,7 @@ impl<'a> Parser<'a> {
                 TokenKind::Comma => {
                     self.bump();
                 }
-                TokenKind::Ident(_) => {
+                TokenKind::Ident(_) | TokenKind::KwRate => {
                     // Lookahead for named args: ident '=' ...
                     let save = self.i;
                     let name_tok = self.bump().unwrap().clone();
@@ -178,6 +238,7 @@ impl<'a> Parser<'a> {
                         let value = self.parse_expr()?;
                         let arg_name = match name_tok.kind {
                             TokenKind::Ident(s) => Ident::new(s, name_tok.span.clone()),
+                            TokenKind::KwRate => Ident::new("rate", name_tok.span.clone()),
                             _ => unreachable!(),
                         };
                         args.push(CallArg::Named {
@@ -201,9 +262,13 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_ident(&mut self, what: &'static str) -> Result<Ident, Diagnostic> {
-        let t = self.expect(|k| matches!(k, TokenKind::Ident(_)), what)?;
+        let t = self.expect(
+            |k| matches!(k, TokenKind::Ident(_) | TokenKind::KwRate),
+            what,
+        )?;
         match &t.kind {
             TokenKind::Ident(s) => Ok(Ident::new(s.clone(), t.span.clone())),
+            TokenKind::KwRate => Ok(Ident::new("rate", t.span.clone())),
             _ => unreachable!(),
         }
     }
@@ -288,11 +353,16 @@ pub fn format_diagnostic(src: &str, diag: &Diagnostic) -> String {
 #[cfg(test)]
 mod tests {
     use super::parse_program;
+    use crate::ast::Item;
     use crate::validate::validate;
 
     const HELLO: &str = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../examples/hello.cv"
+    ));
+    const POISSON: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../examples/poisson.cv"
     ));
 
     #[test]
@@ -302,10 +372,17 @@ mod tests {
     }
 
     #[test]
+    fn parses_and_validates_poisson_example() {
+        let program = parse_program(POISSON).expect("example should parse");
+        validate(&program).expect("example should validate");
+    }
+
+    #[test]
     fn validation_fails_for_unknown_neuron_type() {
         let src = r#"
 neuron LIF { tau_m = 10 ms }
 layer X[1] : NoSuchNeuron
+run for 1 ms
 "#;
 
         let program = parse_program(src).expect("src should parse");
@@ -314,6 +391,24 @@ layer X[1] : NoSuchNeuron
             diags
                 .iter()
                 .any(|d| d.message.contains("unknown neuron type"))
+        );
+    }
+
+    #[test]
+    fn parses_seed_and_step() {
+        let src = r#"
+neuron LIF { tau_m = 10 ms }
+layer X[1] : LIF
+seed 7
+run for 2 ms step 1 ms
+"#;
+        let program = parse_program(src).expect("parse");
+        validate(&program).expect("validate");
+        assert!(
+            program
+                .items
+                .iter()
+                .any(|item| matches!(item, Item::Seed(_)))
         );
     }
 }

@@ -1,0 +1,14 @@
+neuron LIF {
+  tau_m = 20 ms
+  v_th  = 1.0
+}
+
+layer Input[8]  : LIF
+layer Output[4] : LIF
+
+connect Input -> Output { w = Uniform(0.5, 1.0) d = 1 ms }
+
+stimulus Input = Poisson(rate=50 Hz)
+seed 42
+run for 10 ms step 1 ms
+

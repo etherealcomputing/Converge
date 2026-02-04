@@ -11,6 +11,10 @@ pub enum TokenKind {
     KwConnect,
     KwRun,
     KwFor,
+    KwSeed,
+    KwStep,
+    KwStimulus,
+    KwRate,
 
     LBrace,
     RBrace,
@@ -206,6 +210,10 @@ impl<'a> Lexer<'a> {
             "connect" => TokenKind::KwConnect,
             "run" => TokenKind::KwRun,
             "for" => TokenKind::KwFor,
+            "seed" => TokenKind::KwSeed,
+            "step" => TokenKind::KwStep,
+            "stimulus" => TokenKind::KwStimulus,
+            "rate" => TokenKind::KwRate,
             _ => TokenKind::Ident(text.to_string()),
         };
         Ok(Token {

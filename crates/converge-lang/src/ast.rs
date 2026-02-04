@@ -16,7 +16,9 @@ pub enum Item {
     Neuron(NeuronDef),
     Layer(LayerDef),
     Connect(ConnectDef),
+    Stimulus(StimulusDef),
     Run(RunStmt),
+    Seed(SeedStmt),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -42,6 +44,24 @@ pub struct ConnectDef {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunStmt {
     pub duration: Quantity,
+    pub step: Option<Quantity>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SeedStmt {
+    pub value: u64,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StimulusDef {
+    pub layer: Ident,
+    pub model: StimulusModel,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum StimulusModel {
+    Poisson { rate: Quantity },
 }
 
 #[derive(Debug, Clone, PartialEq)]

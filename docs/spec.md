@@ -23,7 +23,9 @@ v_th  = 1.0 V
 run for 10 ms
 ```
 
-Units are currently *parsed* and carried into IR, but not yet dimension-checked.
+Units are parsed and checked for time and rate contexts.
+Supported time units: `s`, `ms`, `us`, `ns`.
+Supported rate units: `Hz`, `kHz`.
 
 ## Grammar (subset)
 
@@ -35,12 +37,17 @@ program      = { item } ;
 item         = neuron_def
              | layer_def
              | connect_def
-             | run_stmt ;
+             | stimulus_def
+             | run_stmt
+             | seed_stmt ;
 
 neuron_def   = "neuron" ident "{" { assign ["," ] } "}" ;
 layer_def    = "layer" ident "[" int "]" ":" ident ;
 connect_def  = "connect" ident "->" ident "{" { assign ["," ] } "}" ;
-run_stmt     = "run" "for" quantity ;
+run_stmt     = "run" "for" quantity [ "step" quantity ] ;
+seed_stmt    = "seed" int ;
+stimulus_def = "stimulus" ident "=" stimulus_model ;
+stimulus_model = "Poisson" "(" "rate" "=" quantity ")" ;
 
 assign       = ident "=" expr ;
 
@@ -64,6 +71,14 @@ The `check` command enforces:
 - Layer definitions are unique by name.
 - Every `layer ... : NeuronType` refers to a defined `neuron`.
 - Every `connect A -> B` refers to defined `layer`s.
+- `run` duration and step must use time units.
+- `stimulus` rate must use frequency units.
+- connection delay `d` must use time units when present.
+
+Defaults:
+
+- `run` step defaults to `1 ms` when omitted
+- `seed` defaults to `0` when omitted
 
 ## Canonical IR (CVIR)
 
@@ -72,5 +87,7 @@ This is intentionally a stepping stone toward a future NIR-aligned interchange p
 
 ## Docs
 
-1. `docs/voice.md` writing rules for project docs
-2. `docs/brand.md` logo and asset guidance
+1. `docs/semantics.md` time model and determinism rules
+2. `docs/cvir.md` canonical IR schema and examples
+3. `docs/voice.md` writing rules for project docs
+4. `docs/brand.md` logo and asset guidance

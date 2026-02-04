@@ -54,14 +54,17 @@ cargo test
 cargo run -p converge-cli -- check examples/hello.cv
 cargo run -p converge-cli -- ast   examples/hello.cv
 cargo run -p converge-cli -- cvir  examples/hello.cv
+cargo run -p converge-cli -- sim   examples/poisson.cv
 ```
 
 ## Docs
 
 1. `docs/spec.md` current accepted grammar and validation rules
-2. `docs/references.md` curated anchors for hardware and interchange
-3. `docs/voice.md` writing rules for project docs
-4. `docs/brand.md` logo and asset guidance
+2. `docs/semantics.md` time model and determinism rules
+3. `docs/cvir.md` canonical IR schema and examples
+4. `docs/references.md` curated anchors for hardware and interchange
+5. `docs/voice.md` writing rules for project docs
+6. `docs/brand.md` logo and asset guidance
 
 ## Origin
 

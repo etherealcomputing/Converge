@@ -4,16 +4,32 @@ pub fn cvir_json(program: &Program) -> String {
     let mut w = JsonWriter::new();
     w.obj_begin();
 
+    w.kv_str("cvir_version", "0.2");
+    w.comma_nl();
     w.key("items");
     w.array_begin();
-    for (idx, item) in program.items.iter().enumerate() {
-        if idx != 0 {
+    let seed = program
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Item::Seed(s) => Some(s.value),
+            _ => None,
+        })
+        .unwrap_or(0);
+
+    let mut first = true;
+    for item in program.items.iter() {
+        if matches!(item, Item::Seed(_)) {
+            continue;
+        }
+        if !first {
             w.comma();
         }
+        first = false;
         w.nl();
-        emit_item(&mut w, item);
+        emit_item(&mut w, item, seed);
     }
-    if !program.items.is_empty() {
+    if !first {
         w.nl();
     }
     w.array_end();
@@ -24,7 +40,7 @@ pub fn cvir_json(program: &Program) -> String {
     w.finish()
 }
 
-fn emit_item(w: &mut JsonWriter, item: &Item) {
+fn emit_item(w: &mut JsonWriter, item: &Item, seed: u64) {
     w.obj_begin();
     match item {
         Item::Neuron(d) => {
@@ -54,11 +70,42 @@ fn emit_item(w: &mut JsonWriter, item: &Item) {
             w.key("body");
             emit_assigns(w, &d.body);
         }
+        Item::Stimulus(d) => {
+            w.kv_str("kind", "stimulus");
+            w.comma_nl();
+            w.kv_str("layer", &d.layer.name);
+            w.comma_nl();
+            w.key("model");
+            emit_stimulus_model(w, &d.model);
+        }
         Item::Run(d) => {
             w.kv_str("kind", "run");
             w.comma_nl();
             w.key("duration");
             emit_quantity(w, &d.duration);
+            w.comma_nl();
+            w.key("step");
+            if let Some(step) = &d.step {
+                emit_quantity(w, step);
+            } else {
+                emit_quantity_value(w, 1.0, Some("ms"));
+            }
+            w.comma_nl();
+            w.kv_u64("seed", seed);
+        }
+        Item::Seed(_) => {}
+    }
+    w.obj_end();
+}
+
+fn emit_stimulus_model(w: &mut JsonWriter, model: &StimulusModel) {
+    w.obj_begin();
+    match model {
+        StimulusModel::Poisson { rate } => {
+            w.kv_str("type", "poisson");
+            w.comma_nl();
+            w.key("rate");
+            emit_quantity(w, rate);
         }
     }
     w.obj_end();
@@ -126,11 +173,15 @@ fn emit_expr(w: &mut JsonWriter, e: &Expr) {
 }
 
 fn emit_quantity(w: &mut JsonWriter, q: &Quantity) {
+    emit_quantity_value(w, q.value, q.unit.as_ref().map(|u| u.name.as_str()));
+}
+
+fn emit_quantity_value(w: &mut JsonWriter, value: f64, unit: Option<&str>) {
     w.obj_begin();
-    w.kv_f64("value", q.value);
-    if let Some(u) = &q.unit {
+    w.kv_f64("value", value);
+    if let Some(u) = unit {
         w.comma_nl();
-        w.kv_str("unit", &u.name);
+        w.kv_str("unit", u);
     }
     w.obj_end();
 }

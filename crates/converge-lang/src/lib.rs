@@ -5,4 +5,5 @@ pub mod diagnostic;
 pub mod emit;
 pub mod lexer;
 pub mod parser;
+pub mod units;
 pub mod validate;
