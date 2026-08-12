@@ -100,6 +100,14 @@ pub fn simulate(program: &Program) -> Result<SimSummary, SimError> {
         let mut spiked: Vec<Vec<usize>> = vec![Vec::new(); layers.len()];
 
         for (layer_idx, layer) in layers.iter_mut().enumerate() {
+            // Leak, integrate, fire. The leak applies to the state carried in from the
+            // previous step, not to charge arriving in this one. Leaking fresh input in the
+            // same step it lands means a unit input can never reach a unit threshold.
+            let decay = step_ns as f64 / layer.tau_m_ns as f64;
+            for v in layer.v.iter_mut() {
+                *v += (-*v) * decay;
+            }
+
             let incoming = &mut queues[layer_idx][bucket];
             for (i, incoming_val) in incoming.iter_mut().enumerate() {
                 layer.v[i] += *incoming_val;
@@ -120,9 +128,7 @@ pub fn simulate(program: &Program) -> Result<SimSummary, SimError> {
                 }
             }
 
-            let decay = step_ns as f64 / layer.tau_m_ns as f64;
             for i in 0..layer.size {
-                layer.v[i] += (-layer.v[i]) * decay;
                 if layer.v[i] >= layer.v_th {
                     layer.v[i] = 0.0;
                     layer.spikes += 1;
@@ -485,6 +491,11 @@ mod tests {
     use super::*;
     use converge_lang::parser::parse_program;
 
+    const POISSON: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../examples/poisson.cv"
+    ));
+
     #[test]
     fn deterministic_summary() {
         let src = r#"
@@ -501,5 +512,34 @@ seed 42
         let b = simulate(&program).expect("sim");
         assert_eq!(a.total_spikes, b.total_spikes);
         assert_eq!(a.layers[0].spikes, b.layers[0].spikes);
+    }
+
+    // A saturated stimulus (p == 1.0) injects exactly v_th every step, so the neuron has to
+    // fire every step. Under a leak applied to fresh input this lands at 0.95 and never fires,
+    // which is the regression this pins.
+    #[test]
+    fn unit_input_reaches_unit_threshold() {
+        let src = r#"
+neuron LIF { tau_m = 20 ms, v_th = 1.0 }
+layer Only[1] : LIF
+stimulus Only = Poisson(rate=1 kHz)
+run for 10 ms step 1 ms
+seed 7
+"#;
+        let program = parse_program(src).expect("parse");
+        let summary = simulate(&program).expect("sim");
+        assert_eq!(summary.total_spikes, 10);
+    }
+
+    // Drive has to reach the downstream layer, not just the stimulated one.
+    #[test]
+    fn drive_propagates_downstream() {
+        let program = parse_program(POISSON).expect("parse");
+        let summary = simulate(&program).expect("sim");
+        assert_eq!(summary.total_spikes, 7);
+        assert_eq!(summary.layers[0].name, "Input");
+        assert_eq!(summary.layers[0].spikes, 3);
+        assert_eq!(summary.layers[1].name, "Output");
+        assert_eq!(summary.layers[1].spikes, 4);
     }
 }

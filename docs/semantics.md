@@ -19,13 +19,18 @@ Determinism is enforced by design:
 
 ## LIF update rule
 
-The current simulator implements a simple LIF update:
+The current simulator implements a simple LIF update. The order is leak, integrate, fire:
 
 ```
-v = v + incoming
-v = v + (-v) * (dt / tau_m)
+v = v + (-v) * (dt / tau_m)     // leak the state carried in from the previous step
+v = v + incoming                // synaptic charge, then stimulus
 if v >= v_th then spike and reset to 0
 ```
+
+The leak applies to the state carried in from the previous step, never to charge arriving in
+the current one. Order matters here. Leaking fresh input in the step it lands means a unit
+input can't reach a unit threshold, and the network sits silent no matter how hard you drive
+it.
 
 This is a minimal slice. It will evolve as new neuron models land.
 
