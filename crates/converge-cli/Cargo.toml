@@ -11,4 +11,5 @@ path = "src/main.rs"
 
 [dependencies]
 converge-lang = { path = "../converge-lang" }
+converge-perturb = { path = "../converge-perturb" }
 converge-sim = { path = "../converge-sim" }

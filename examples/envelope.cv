@@ -1,0 +1,22 @@
+// A network with sustained activity in both layers, sized for a fault sweep.
+//
+// The recurrent inhibition on Relay gives `ei_scale` something to act on, and the run is long
+// enough that the per-window observables mean something. Try:
+//
+//   converge perturb examples/envelope.cv
+
+neuron LIF {
+  tau_m = 20 ms
+  v_th  = 1.0 V
+}
+
+layer Sense[8] : LIF
+layer Relay[4] : LIF
+
+connect Sense -> Relay { w = Uniform(0.2 V, 0.6 V) d = 1 ms }
+connect Relay -> Relay { w = -0.15 V d = 2 ms }
+
+stimulus Sense = Poisson(rate=400 Hz)
+
+seed 42
+run for 200 ms step 1 ms

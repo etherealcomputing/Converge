@@ -111,5 +111,7 @@ This is intentionally a stepping stone toward a future NIR-aligned interchange p
 
 1. `docs/semantics.md` time model and determinism rules
 2. `docs/cvir.md` canonical IR schema and examples
-3. `docs/voice.md` writing rules for project docs
-4. `docs/brand.md` logo and asset guidance
+3. `docs/perturbation.md` fault operators, invariants and the failure envelope
+4. `docs/references.md` curated anchors for hardware and interchange
+5. `docs/voice.md` writing rules for project docs
+6. `docs/brand.md` logo and asset guidance
