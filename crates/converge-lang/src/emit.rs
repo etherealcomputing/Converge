@@ -298,3 +298,74 @@ impl JsonWriter {
         self.write("\"");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::parse_program;
+
+    const HELLO: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../examples/hello.cv"
+    ));
+    const POISSON: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../examples/poisson.cv"
+    ));
+
+    const HELLO_CVIR: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/golden/hello.cvir.json"
+    ));
+    const POISSON_CVIR: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/golden/poisson.cvir.json"
+    ));
+
+    // These compare the whole document, byte for byte. CVIR is a stable artifact, so a
+    // reordered field or an added key has to fail here and get signed off, not slip through.
+    // If you're editing a golden file to make a test pass, stop: that's an IR break.
+
+    #[test]
+    fn hello_cvir_matches_golden() {
+        let program = parse_program(HELLO).expect("parse");
+        assert_eq!(cvir_json(&program), HELLO_CVIR);
+    }
+
+    #[test]
+    fn poisson_cvir_matches_golden() {
+        let program = parse_program(POISSON).expect("parse");
+        assert_eq!(cvir_json(&program), POISSON_CVIR);
+    }
+
+    #[test]
+    fn cvir_version_is_pinned() {
+        let program = parse_program(POISSON).expect("parse");
+        assert!(cvir_json(&program).contains("\"cvir_version\": \"0.2\""));
+    }
+
+    #[test]
+    fn cvir_output_is_stable_across_calls() {
+        let program = parse_program(HELLO).expect("parse");
+        assert_eq!(cvir_json(&program), cvir_json(&program));
+    }
+
+    // `seed` is not an item in CVIR. It's hoisted into the run node and the Seed item is
+    // dropped, so poisson.cv's `seed 42` has to show up there and nowhere else.
+    #[test]
+    fn seed_is_hoisted_into_run() {
+        let program = parse_program(POISSON).expect("parse");
+        let json = cvir_json(&program);
+        assert!(json.contains("\"seed\": 42"));
+        assert!(!json.contains("\"kind\": \"seed\""));
+    }
+
+    // An omitted `step` is materialized as 1 ms at emit time rather than left absent.
+    #[test]
+    fn omitted_step_is_materialized() {
+        let program = parse_program(HELLO).expect("parse");
+        let json = cvir_json(&program);
+        assert!(json.contains("\"step\": {"));
+        assert!(json.contains("\"value\": 1,\n        \"unit\": \"ms\""));
+    }
+}

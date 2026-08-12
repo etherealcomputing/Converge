@@ -1,0 +1,92 @@
+{
+  "cvir_version": "0.2",
+  "items": [
+    {
+      "kind": "neuron",
+      "name": "LIF",
+      "body": [
+        {
+          "key": "tau_m",
+          "value": {
+            "value": 20,
+            "unit": "ms"
+          }
+        },
+        {
+          "key": "v_th",
+          "value": {
+            "value": 1,
+            "unit": "V"
+          }
+        }
+
+      ]
+    },
+    {
+      "kind": "layer",
+      "name": "Input",
+      "size": 4,
+      "neuron": "LIF"
+    },
+    {
+      "kind": "layer",
+      "name": "Output",
+      "size": 2,
+      "neuron": "LIF"
+    },
+    {
+      "kind": "connect",
+      "src": "Input",
+      "dst": "Output",
+      "body": [
+        {
+          "key": "w",
+          "value": {
+            "call": "Uniform",
+            "args": [
+              {
+                "value": -1
+              },
+              {
+                "value": 1
+              }
+
+            ]
+          }
+        },
+        {
+          "key": "d",
+          "value": {
+            "call": "Normal",
+            "args": [
+              {
+                "value": 1,
+                "unit": "ms"
+              },
+              {
+                "value": 0.1,
+                "unit": "ms"
+              }
+
+            ]
+          }
+        }
+
+      ]
+    },
+    {
+      "kind": "run",
+      "duration": {
+        "value": 10,
+        "unit": "ms"
+      },
+      "step": {
+        "value": 1,
+        "unit": "ms"
+      },
+      "seed": 0
+    }
+
+  ]
+
+}
