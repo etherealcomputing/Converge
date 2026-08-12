@@ -1,4 +1,6 @@
-use std::collections::HashMap;
+#![forbid(unsafe_code)]
+
+use std::collections::BTreeMap;
 use std::fmt;
 
 use converge_lang::ast::{
@@ -13,6 +15,19 @@ pub struct SimSummary {
     pub seed: u64,
     pub total_spikes: u64,
     pub layers: Vec<LayerSummary>,
+    pub delay_quantization: DelayQuantization,
+}
+
+/// What the step grid did to the delays it was handed. A delay is a time, and a coercion you
+/// can't see is a coercion you can't trust, so the simulator reports what it moved.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DelayQuantization {
+    /// Synapses whose sampled delay wasn't already a whole number of steps.
+    pub synapses_rounded: u64,
+    /// Largest absolute rounding error applied, in nanoseconds.
+    pub max_error_ns: i64,
+    /// Synapses whose delay rounded to zero steps and were raised to the one step floor.
+    pub synapses_floored: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -77,10 +92,25 @@ pub fn simulate(program: &Program) -> Result<SimSummary, SimError> {
 
     let neuron_defs = collect_neuron_defs(program)?;
     let (mut layers, layer_index) = build_layers(program, &neuron_defs)?;
-    let stimuli = collect_stimuli(program, &layer_index)?;
-    let connections = build_connections(program, &layer_index, &mut layers, step_ns, seed)?;
 
-    let mut rng = Rng::new(seed);
+    // decay is step/tau_m. Past 1.0 the membrane flips sign every step and at exactly 2.0 it
+    // negates. That isn't a leaky integrator, so refuse the run rather than clamp and pretend.
+    for layer in &layers {
+        if step_ns > layer.tau_m_ns {
+            return Err(SimError {
+                message: format!(
+                    "run step ({} ns) exceeds tau_m ({} ns) for layer `{}`",
+                    step_ns, layer.tau_m_ns, layer.name
+                ),
+            });
+        }
+    }
+
+    let stimuli = collect_stimuli(program, &layer_index)?;
+    let (connections, delay_quantization) =
+        build_connections(program, &layer_index, &mut layers, step_ns, seed)?;
+
+    let mut rng = Rng::stream(seed, stream::STIMULUS);
     let mut total_spikes = 0u64;
 
     let max_delay = connections
@@ -166,6 +196,7 @@ pub fn simulate(program: &Program) -> Result<SimSummary, SimError> {
         seed,
         total_spikes,
         layers: layers_summary,
+        delay_quantization,
     })
 }
 
@@ -188,7 +219,21 @@ pub fn summary_json(summary: &SimSummary) -> String {
         }
         s.push('\n');
     }
-    s.push_str("  ]\n");
+    s.push_str("  ],\n");
+    s.push_str("  \"delay_quantization\": {\n");
+    s.push_str(&format!(
+        "    \"synapses_rounded\": {},\n",
+        summary.delay_quantization.synapses_rounded
+    ));
+    s.push_str(&format!(
+        "    \"max_error_ns\": {},\n",
+        summary.delay_quantization.max_error_ns
+    ));
+    s.push_str(&format!(
+        "    \"synapses_floored\": {}\n",
+        summary.delay_quantization.synapses_floored
+    ));
+    s.push_str("  }\n");
     s.push_str("}\n");
     s
 }
@@ -224,8 +269,8 @@ enum Dist {
     Normal(f64, f64),
 }
 
-fn collect_neuron_defs(program: &Program) -> Result<HashMap<String, NeuronDef>, SimError> {
-    let mut map = HashMap::new();
+fn collect_neuron_defs(program: &Program) -> Result<BTreeMap<String, NeuronDef>, SimError> {
+    let mut map = BTreeMap::new();
     for item in &program.items {
         if let Item::Neuron(def) = item {
             map.insert(def.name.name.clone(), def.clone());
@@ -236,10 +281,10 @@ fn collect_neuron_defs(program: &Program) -> Result<HashMap<String, NeuronDef>, 
 
 fn build_layers(
     program: &Program,
-    neuron_defs: &HashMap<String, NeuronDef>,
-) -> Result<(Vec<LayerState>, HashMap<String, usize>), SimError> {
+    neuron_defs: &BTreeMap<String, NeuronDef>,
+) -> Result<(Vec<LayerState>, BTreeMap<String, usize>), SimError> {
     let mut layers = Vec::new();
-    let mut index = HashMap::new();
+    let mut index = BTreeMap::new();
 
     for item in &program.items {
         if let Item::Layer(def) = item {
@@ -266,9 +311,9 @@ fn build_layers(
 
 fn collect_stimuli(
     program: &Program,
-    layer_index: &HashMap<String, usize>,
-) -> Result<HashMap<usize, f64>, SimError> {
-    let mut map: HashMap<usize, f64> = HashMap::new();
+    layer_index: &BTreeMap<String, usize>,
+) -> Result<BTreeMap<usize, f64>, SimError> {
+    let mut map: BTreeMap<usize, f64> = BTreeMap::new();
     for item in &program.items {
         if let Item::Stimulus(StimulusDef { layer, model }) = item {
             let idx = *layer_index.get(&layer.name).ok_or_else(|| SimError {
@@ -288,13 +333,14 @@ fn collect_stimuli(
 
 fn build_connections(
     program: &Program,
-    layer_index: &HashMap<String, usize>,
+    layer_index: &BTreeMap<String, usize>,
     layers: &mut [LayerState],
     step_ns: i64,
     seed: u64,
-) -> Result<Vec<Connection>, SimError> {
-    let mut rng = Rng::new(seed ^ 0x9E3779B97F4A7C15);
+) -> Result<(Vec<Connection>, DelayQuantization), SimError> {
+    let mut rng = Rng::stream(seed, stream::STRUCTURE);
     let mut connections = Vec::new();
+    let mut quantization = DelayQuantization::default();
 
     for item in &program.items {
         let Item::Connect(ConnectDef { src, dst, body }) = item else {
@@ -318,22 +364,44 @@ fn build_connections(
             for dst_i in 0..dst_size {
                 let weight = sample_dist(&weight_dist, &mut rng);
                 let delay_ns = sample_dist(&delay_dist, &mut rng);
+                if !weight.is_finite() {
+                    return Err(SimError {
+                        message: "weight distribution produced a non-finite value".to_string(),
+                    });
+                }
+                if !delay_ns.is_finite() {
+                    return Err(SimError {
+                        message: "delay distribution produced a non-finite value".to_string(),
+                    });
+                }
                 if delay_ns < 0.0 {
                     return Err(SimError {
                         message: "negative delay is not allowed".to_string(),
                     });
                 }
                 let delay_ns_i = delay_ns.round() as i64;
-                if delay_ns_i % step_ns != 0 {
-                    return Err(SimError {
-                        message: "delay must be divisible by step".to_string(),
-                    });
+
+                // Round to the nearest whole step and count the coercion. Rejecting delays
+                // that don't land exactly on the grid would make Normal and Uniform delay
+                // distributions unusable, but a silently moved time is worse. Report it.
+                let mut steps = (delay_ns_i as f64 / step_ns as f64).round() as i64;
+                let error_ns = (steps * step_ns - delay_ns_i).abs();
+                if error_ns > 0 {
+                    quantization.synapses_rounded += 1;
+                    quantization.max_error_ns = quantization.max_error_ns.max(error_ns);
                 }
-                let delay_steps = (delay_ns_i / step_ns) as usize;
+
+                // A spike can't be delivered in the step it was emitted, so one step is the
+                // floor. This is a separate rule from grid rounding and is counted separately.
+                if steps < 1 {
+                    steps = 1;
+                    quantization.synapses_floored += 1;
+                }
+
                 syn_list.push(Synapse {
                     dst: dst_i,
                     weight,
-                    delay_steps,
+                    delay_steps: steps as usize,
                 });
             }
         }
@@ -345,7 +413,7 @@ fn build_connections(
         });
     }
 
-    Ok(connections)
+    Ok((connections, quantization))
 }
 
 fn lif_params(neuron: &NeuronDef) -> Result<LifParams, SimError> {
@@ -453,7 +521,8 @@ fn sample_dist(dist: &Dist, rng: &mut Rng) -> f64 {
         Dist::Const(v) => *v,
         Dist::Uniform(a, b) => a + (b - a) * rng.next_f64(),
         Dist::Normal(mu, sigma) => {
-            let (u1, u2) = (rng.next_f64(), rng.next_f64());
+            // Box-Muller. u1 comes from the open interval so the log can't blow up.
+            let (u1, u2) = (rng.next_f64_open(), rng.next_f64());
             let z0 = (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos();
             mu + z0 * sigma
         }
@@ -466,24 +535,53 @@ fn to_err(diag: converge_lang::diagnostic::Diagnostic) -> SimError {
     }
 }
 
-struct Rng {
+/// Stream keys. Every draw site takes its own stream, so adding one can't shift the numbers
+/// at another. Values are arbitrary; only distinctness matters.
+pub mod stream {
+    /// Weight and delay sampling when connections are built.
+    pub const STRUCTURE: u64 = 1;
+    /// Per-step stimulus draws.
+    pub const STIMULUS: u64 = 2;
+}
+
+/// SplitMix64. Deterministic, portable, and no dependency.
+///
+/// This replaced a bare LCG that stored the seed as its state directly. That version had a
+/// degenerate start: with the default `seed 0` its first output was exactly 1, so the first
+/// `next_f64` was exactly 0.0 and neuron 0 of a stimulated layer always fired on step 0.
+pub struct Rng {
     state: u64,
 }
 
 impl Rng {
-    fn new(seed: u64) -> Self {
-        Self { state: seed }
+    /// An independent stream for `seed`. Use the constants in [`stream`] for `key`.
+    pub fn stream(seed: u64, key: u64) -> Self {
+        // Mix on the way in so neighbouring seeds and small keys don't start out correlated.
+        let state = mix64(seed ^ key.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        Self { state }
     }
 
-    fn next_u64(&mut self) -> u64 {
-        self.state = self.state.wrapping_mul(6364136223846793005).wrapping_add(1);
-        self.state
+    pub fn next_u64(&mut self) -> u64 {
+        self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        mix64(self.state)
     }
 
-    fn next_f64(&mut self) -> f64 {
-        let v = self.next_u64() >> 11;
-        (v as f64) / ((1u64 << 53) as f64)
+    /// Uniform on `[0, 1)`.
+    pub fn next_f64(&mut self) -> f64 {
+        (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64
     }
+
+    /// Uniform on the open interval `(0, 1)`. Samplers that take a log need this; `ln(0)` is
+    /// not a value we want reaching a weight or a delay.
+    pub fn next_f64_open(&mut self) -> f64 {
+        ((self.next_u64() >> 11) as f64 + 0.5) / (1u64 << 53) as f64
+    }
+}
+
+fn mix64(mut z: u64) -> u64 {
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
 }
 
 #[cfg(test)]
@@ -494,6 +592,10 @@ mod tests {
     const POISSON: &str = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../examples/poisson.cv"
+    ));
+    const HELLO: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../examples/hello.cv"
     ));
 
     #[test]
@@ -536,10 +638,125 @@ seed 7
     fn drive_propagates_downstream() {
         let program = parse_program(POISSON).expect("parse");
         let summary = simulate(&program).expect("sim");
-        assert_eq!(summary.total_spikes, 7);
+        assert_eq!(summary.total_spikes, 6);
         assert_eq!(summary.layers[0].name, "Input");
-        assert_eq!(summary.layers[0].spikes, 3);
+        assert_eq!(summary.layers[0].spikes, 2);
         assert_eq!(summary.layers[1].name, "Output");
         assert_eq!(summary.layers[1].spikes, 4);
+        assert_eq!(summary.delay_quantization, DelayQuantization::default());
+    }
+
+    fn sim(src: &str) -> SimSummary {
+        let program = parse_program(src).expect("parse");
+        simulate(&program).expect("sim")
+    }
+
+    // An omitted `d` is a zero delay, and zero rounds up to the one step floor. It used to
+    // land in a ring bucket that had already been drained this step, so it arrived queue_len
+    // steps later instead of one.
+    #[test]
+    fn omitted_delay_is_one_step() {
+        let omitted = sim(r#"
+neuron LIF { tau_m = 20 ms, v_th = 1.0 }
+layer A[2] : LIF
+layer B[2] : LIF
+connect A -> B { w = 1.0 }
+stimulus A = Poisson(rate=1 kHz)
+run for 10 ms step 1 ms
+seed 3
+"#);
+        let explicit = sim(r#"
+neuron LIF { tau_m = 20 ms, v_th = 1.0 }
+layer A[2] : LIF
+layer B[2] : LIF
+connect A -> B { w = 1.0, d = 1 ms }
+stimulus A = Poisson(rate=1 kHz)
+run for 10 ms step 1 ms
+seed 3
+"#);
+        assert_eq!(omitted.total_spikes, explicit.total_spikes);
+        assert_eq!(omitted.layers[1].spikes, explicit.layers[1].spikes);
+        assert_eq!(omitted.delay_quantization.synapses_floored, 4);
+        assert_eq!(explicit.delay_quantization.synapses_floored, 0);
+    }
+
+    // The ring is sized from the longest delay in the whole network. A long-delay connection
+    // somewhere else must not change when a short-delay connection delivers.
+    #[test]
+    fn long_delay_elsewhere_does_not_shift_short_delay() {
+        let alone = sim(r#"
+neuron LIF { tau_m = 20 ms, v_th = 1.0 }
+layer A[2] : LIF
+layer B[2] : LIF
+connect A -> B { w = 1.0, d = 1 ms }
+stimulus A = Poisson(rate=1 kHz)
+run for 10 ms step 1 ms
+seed 5
+"#);
+        let with_long = sim(r#"
+neuron LIF { tau_m = 20 ms, v_th = 1.0 }
+layer A[2] : LIF
+layer B[2] : LIF
+layer C[2] : LIF
+connect A -> B { w = 1.0, d = 1 ms }
+connect A -> C { w = 1.0, d = 5 ms }
+stimulus A = Poisson(rate=1 kHz)
+run for 10 ms step 1 ms
+seed 5
+"#);
+        assert_eq!(alone.layers[1].name, "B");
+        assert_eq!(with_long.layers[1].name, "B");
+        assert_eq!(alone.layers[1].spikes, with_long.layers[1].spikes);
+    }
+
+    // Delays off the step grid are rounded to it and the coercion is reported, not hidden and
+    // not fatal. hello.cv draws its delays from a Normal, so effectively none of them land on
+    // the grid, and the whole file used to be unsimulatable because of it.
+    #[test]
+    fn off_grid_delays_are_rounded_and_reported() {
+        let summary = sim(HELLO);
+        assert_eq!(summary.delay_quantization.synapses_rounded, 8);
+        assert!(summary.delay_quantization.max_error_ns > 0);
+        assert!(summary.delay_quantization.max_error_ns < summary.step_ns);
+    }
+
+    // decay is step/tau_m. Past 1.0 the membrane flips sign every step, so refuse the run.
+    #[test]
+    fn step_may_not_exceed_tau_m() {
+        let program = parse_program(
+            r#"
+neuron Fast { tau_m = 1 ms, v_th = 1.0 }
+layer A[1] : Fast
+run for 10 ms step 2 ms
+"#,
+        )
+        .expect("parse");
+        let err = simulate(&program).expect_err("should reject");
+        assert!(err.message.contains("exceeds tau_m"), "{}", err.message);
+    }
+
+    // The old LCG stored the seed as its state, so seed 0 produced exactly 0.0 as its first
+    // draw and neuron 0 always fired on step 0.
+    #[test]
+    fn default_seed_has_no_degenerate_first_draw() {
+        let mut rng = Rng::stream(0, stream::STIMULUS);
+        let first = rng.next_f64();
+        assert!(first > 0.0 && first < 1.0, "{first}");
+    }
+
+    #[test]
+    fn streams_are_independent() {
+        let mut a = Rng::stream(42, stream::STRUCTURE);
+        let mut b = Rng::stream(42, stream::STIMULUS);
+        assert_ne!(a.next_u64(), b.next_u64());
+    }
+
+    #[test]
+    fn open_interval_never_yields_zero() {
+        let mut rng = Rng::stream(0, stream::STRUCTURE);
+        for _ in 0..10_000 {
+            let v = rng.next_f64_open();
+            assert!(v > 0.0 && v < 1.0, "{v}");
+        }
     }
 }
