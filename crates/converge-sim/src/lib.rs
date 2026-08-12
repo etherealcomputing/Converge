@@ -660,6 +660,10 @@ pub mod stream {
     pub const STRUCTURE: u64 = 1;
     /// Per-step stimulus draws.
     pub const STIMULUS: u64 = 2;
+    /// Per-synapse ablation keys, drawn by the perturbation crate.
+    pub const PERTURB_PRUNE: u64 = 3;
+    /// Per-synapse timing offsets, drawn by the perturbation crate.
+    pub const PERTURB_JITTER: u64 = 4;
 }
 
 /// SplitMix64. Deterministic, portable, and no dependency.

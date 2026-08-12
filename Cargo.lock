@@ -15,6 +15,14 @@ name = "converge-lang"
 version = "0.1.0"
 
 [[package]]
+name = "converge-perturb"
+version = "0.1.0"
+dependencies = [
+ "converge-lang",
+ "converge-sim",
+]
+
+[[package]]
 name = "converge-sim"
 version = "0.1.0"
 dependencies = [

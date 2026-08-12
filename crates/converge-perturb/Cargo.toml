@@ -1,0 +1,13 @@
+[package]
+name = "converge-perturb"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+converge-lang = { path = "../converge-lang" }
+converge-sim = { path = "../converge-sim" }
