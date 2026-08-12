@@ -16,6 +16,9 @@ pub struct SimSummary {
     pub total_spikes: u64,
     pub layers: Vec<LayerSummary>,
     pub delay_quantization: DelayQuantization,
+    /// Membrane values seen non-finite during the run. Anything above zero means the dynamics
+    /// left the reals and every number downstream of it is suspect.
+    pub nonfinite: u64,
 }
 
 /// What the step grid did to the delays it was handed. A delay is a time, and a coercion you
@@ -35,6 +38,8 @@ pub struct LayerSummary {
     pub name: String,
     pub size: u64,
     pub spikes: u64,
+    /// Spike counts bucketed into [`WINDOW_COUNT`] equal windows across the run.
+    pub windows: Vec<u64>,
 }
 
 #[derive(Debug)]
@@ -50,7 +55,14 @@ impl fmt::Display for SimError {
 
 impl std::error::Error for SimError {}
 
+/// Elaborate and run in one shot.
 pub fn simulate(program: &Program) -> Result<SimSummary, SimError> {
+    run(&elaborate(program)?)
+}
+
+/// Resolve a program into a concrete [`Network`]: sizes, sampled weights and delays, unit
+/// conversions. Split out from [`run`] so a pass can perturb the result before executing it.
+pub fn elaborate(program: &Program) -> Result<Network, SimError> {
     let seed = program
         .items
         .iter()
@@ -91,7 +103,7 @@ pub fn simulate(program: &Program) -> Result<SimSummary, SimError> {
     let steps = (duration_ns / step_ns) as usize;
 
     let neuron_defs = collect_neuron_defs(program)?;
-    let (mut layers, layer_index) = build_layers(program, &neuron_defs)?;
+    let (layers, layer_index) = build_layers(program, &neuron_defs)?;
 
     // decay is step/tau_m. Past 1.0 the membrane flips sign every step and at exactly 2.0 it
     // negates. That isn't a leaky integrator, so refuse the run rather than clamp and pretend.
@@ -108,43 +120,85 @@ pub fn simulate(program: &Program) -> Result<SimSummary, SimError> {
 
     let stimuli = collect_stimuli(program, &layer_index)?;
     let (connections, delay_quantization) =
-        build_connections(program, &layer_index, &mut layers, step_ns, seed)?;
+        build_connections(program, &layer_index, &layers, step_ns, seed)?;
 
-    let mut rng = Rng::stream(seed, stream::STIMULUS);
+    Ok(Network {
+        duration_ns,
+        step_ns,
+        steps,
+        seed,
+        layers,
+        connections,
+        stimuli,
+        delay_quantization,
+    })
+}
+
+/// Execute an elaborated network.
+pub fn run(net: &Network) -> Result<SimSummary, SimError> {
+    let steps = net.steps;
+    let step_ns = net.step_ns;
+
+    let mut state: Vec<LayerRun> = net
+        .layers
+        .iter()
+        .map(|l| LayerRun {
+            v: vec![0.0; l.size],
+            spikes: 0,
+            windows: vec![0; WINDOW_COUNT],
+        })
+        .collect();
+
+    // At most one stimulus per layer, so this is a straight lookup and the draw order stays
+    // exactly the layer order.
+    let mut drive: Vec<Option<(f64, f64)>> = vec![None; net.layers.len()];
+    for s in &net.stimuli {
+        drive[s.layer] = Some((s.rate_hz, s.amplitude));
+    }
+
+    let mut rng = Rng::stream(net.seed, stream::STIMULUS);
     let mut total_spikes = 0u64;
+    let mut nonfinite = 0u64;
 
-    let max_delay = connections
+    // Sized from the network we were handed, not from elaboration. A pass that lengthens a
+    // delay has to get a ring big enough to hold it.
+    let max_delay = net
+        .connections
         .iter()
         .flat_map(|c| c.synapses.iter().flatten().map(|s| s.delay_steps))
         .max()
         .unwrap_or(0);
     let queue_len = max_delay + 1;
 
-    let mut queues: Vec<Vec<Vec<f64>>> = layers
+    let mut queues: Vec<Vec<Vec<f64>>> = net
+        .layers
         .iter()
         .map(|layer| vec![vec![0.0; layer.size]; queue_len])
         .collect();
 
     for step in 0..steps {
+        let window = window_of(step, steps);
         let bucket = step % queue_len;
-        let mut spiked: Vec<Vec<usize>> = vec![Vec::new(); layers.len()];
+        let mut spiked: Vec<Vec<usize>> = vec![Vec::new(); net.layers.len()];
 
-        for (layer_idx, layer) in layers.iter_mut().enumerate() {
+        for (layer_idx, layer) in net.layers.iter().enumerate() {
+            let run_state = &mut state[layer_idx];
+
             // Leak, integrate, fire. The leak applies to the state carried in from the
             // previous step, not to charge arriving in this one. Leaking fresh input in the
             // same step it lands means a unit input can never reach a unit threshold.
             let decay = step_ns as f64 / layer.tau_m_ns as f64;
-            for v in layer.v.iter_mut() {
+            for v in run_state.v.iter_mut() {
                 *v += (-*v) * decay;
             }
 
             let incoming = &mut queues[layer_idx][bucket];
             for (i, incoming_val) in incoming.iter_mut().enumerate() {
-                layer.v[i] += *incoming_val;
+                run_state.v[i] += *incoming_val;
                 *incoming_val = 0.0;
             }
 
-            if let Some(rate_hz) = stimuli.get(&layer_idx) {
+            if let Some((rate_hz, amplitude)) = drive[layer_idx] {
                 let p = rate_hz * (step_ns as f64 / 1_000_000_000.0);
                 if p > 1.0 {
                     return Err(SimError {
@@ -153,22 +207,27 @@ pub fn simulate(program: &Program) -> Result<SimSummary, SimError> {
                 }
                 for i in 0..layer.size {
                     if rng.next_f64() < p {
-                        layer.v[i] += 1.0;
+                        run_state.v[i] += amplitude;
                     }
                 }
             }
 
             for i in 0..layer.size {
-                if layer.v[i] >= layer.v_th {
-                    layer.v[i] = 0.0;
-                    layer.spikes += 1;
+                if !run_state.v[i].is_finite() {
+                    nonfinite += 1;
+                    continue;
+                }
+                if run_state.v[i] >= layer.v_th {
+                    run_state.v[i] = 0.0;
+                    run_state.spikes += 1;
+                    run_state.windows[window] += 1;
                     total_spikes += 1;
                     spiked[layer_idx].push(i);
                 }
             }
         }
 
-        for conn in &connections {
+        for conn in &net.connections {
             if spiked[conn.src_layer].is_empty() {
                 continue;
             }
@@ -181,23 +240,47 @@ pub fn simulate(program: &Program) -> Result<SimSummary, SimError> {
         }
     }
 
-    let layers_summary = layers
+    let layers_summary = net
+        .layers
         .iter()
-        .map(|l| LayerSummary {
+        .zip(state)
+        .map(|(l, s)| LayerSummary {
             name: l.name.clone(),
             size: l.size as u64,
-            spikes: l.spikes,
+            spikes: s.spikes,
+            windows: s.windows,
         })
         .collect();
 
     Ok(SimSummary {
-        duration_ns,
+        duration_ns: net.duration_ns,
         step_ns,
-        seed,
+        seed: net.seed,
         total_spikes,
         layers: layers_summary,
-        delay_quantization,
+        delay_quantization: net.delay_quantization.clone(),
+        nonfinite,
     })
+}
+
+/// Per-layer runtime state. Kept out of [`Layer`] so a network stays a description of what to
+/// run rather than a half-finished run.
+struct LayerRun {
+    v: Vec<f64>,
+    spikes: u64,
+    windows: Vec<u64>,
+}
+
+/// Spike counts are bucketed into this many equal windows across the run. Totals alone can't
+/// tell a steady rate from a long silence with one burst at the end, and the invariants a
+/// fault sweep checks need that difference.
+pub const WINDOW_COUNT: usize = 16;
+
+/// Which window a step falls in. Distributes evenly for any step count, including counts
+/// below `WINDOW_COUNT`, with no remainder to special-case.
+pub fn window_of(step: usize, steps: usize) -> usize {
+    debug_assert!(steps > 0);
+    ((step as u64 * WINDOW_COUNT as u64) / steps as u64) as usize
 }
 
 pub fn summary_json(summary: &SimSummary) -> String {
@@ -207,12 +290,15 @@ pub fn summary_json(summary: &SimSummary) -> String {
     s.push_str(&format!("  \"step_ns\": {},\n", summary.step_ns));
     s.push_str(&format!("  \"seed\": {},\n", summary.seed));
     s.push_str(&format!("  \"total_spikes\": {},\n", summary.total_spikes));
+    s.push_str(&format!("  \"nonfinite\": {},\n", summary.nonfinite));
     s.push_str("  \"layers\": [\n");
     for (idx, layer) in summary.layers.iter().enumerate() {
         s.push_str("    {\n");
         s.push_str(&format!("      \"name\": \"{}\",\n", layer.name));
         s.push_str(&format!("      \"size\": {},\n", layer.size));
-        s.push_str(&format!("      \"spikes\": {}\n", layer.spikes));
+        s.push_str(&format!("      \"spikes\": {},\n", layer.spikes));
+        let windows: Vec<String> = layer.windows.iter().map(|w| w.to_string()).collect();
+        s.push_str(&format!("      \"windows\": [{}]\n", windows.join(", ")));
         s.push_str("    }");
         if idx + 1 != summary.layers.len() {
             s.push(',');
@@ -238,28 +324,56 @@ pub fn summary_json(summary: &SimSummary) -> String {
     s
 }
 
-#[derive(Clone)]
-struct LayerState {
-    name: String,
-    size: usize,
-    tau_m_ns: i64,
-    v_th: f64,
-    v: Vec<f64>,
-    spikes: u64,
+/// A program with every parameter resolved: sizes fixed, weights and delays sampled, units
+/// converted. This is what [`run`] executes, and it's the surface a fault-injection pass
+/// perturbs. Everything is a plain field on purpose.
+#[derive(Debug, Clone)]
+pub struct Network {
+    pub duration_ns: i64,
+    pub step_ns: i64,
+    pub steps: usize,
+    pub seed: u64,
+    pub layers: Vec<Layer>,
+    pub connections: Vec<Connection>,
+    /// At most one entry per layer, ordered by layer index.
+    pub stimuli: Vec<Stimulus>,
+    pub delay_quantization: DelayQuantization,
 }
 
-#[derive(Clone)]
-struct Connection {
-    src_layer: usize,
-    dst_layer: usize,
-    synapses: Vec<Vec<Synapse>>,
+#[derive(Debug, Clone)]
+pub struct Layer {
+    pub name: String,
+    pub size: usize,
+    pub tau_m_ns: i64,
+    /// Threshold in volts.
+    pub v_th: f64,
 }
 
-#[derive(Clone)]
-struct Synapse {
-    dst: usize,
-    weight: f64,
-    delay_steps: usize,
+#[derive(Debug, Clone)]
+pub struct Connection {
+    pub src_layer: usize,
+    pub dst_layer: usize,
+    /// Indexed by source neuron. Connectivity is dense, so the inner vector holds one synapse
+    /// per destination neuron until something ablates it.
+    pub synapses: Vec<Vec<Synapse>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Synapse {
+    pub dst: usize,
+    /// Weight in volts.
+    pub weight: f64,
+    /// Always at least 1. A spike can't be delivered in the step it was emitted.
+    pub delay_steps: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct Stimulus {
+    pub layer: usize,
+    pub rate_hz: f64,
+    /// Volts injected per stimulus event. Separating this from the rate gives a drive knob
+    /// that doesn't disturb the draw sequence.
+    pub amplitude: f64,
 }
 
 #[derive(Clone)]
@@ -282,7 +396,7 @@ fn collect_neuron_defs(program: &Program) -> Result<BTreeMap<String, NeuronDef>,
 fn build_layers(
     program: &Program,
     neuron_defs: &BTreeMap<String, NeuronDef>,
-) -> Result<(Vec<LayerState>, BTreeMap<String, usize>), SimError> {
+) -> Result<(Vec<Layer>, BTreeMap<String, usize>), SimError> {
     let mut layers = Vec::new();
     let mut index = BTreeMap::new();
 
@@ -293,15 +407,12 @@ fn build_layers(
             })?;
             let params = lif_params(neuron)?;
 
-            let size = def.size as usize;
             index.insert(def.name.name.clone(), layers.len());
-            layers.push(LayerState {
+            layers.push(Layer {
                 name: def.name.name.clone(),
-                size,
+                size: def.size as usize,
                 tau_m_ns: params.tau_m_ns,
                 v_th: params.v_th,
-                v: vec![0.0; size],
-                spikes: 0,
             });
         }
     }
@@ -309,11 +420,13 @@ fn build_layers(
     Ok((layers, index))
 }
 
+/// Several `stimulus` statements on one layer sum their rates into a single entry, so the
+/// result holds at most one stimulus per layer and stays ordered by layer index.
 fn collect_stimuli(
     program: &Program,
     layer_index: &BTreeMap<String, usize>,
-) -> Result<BTreeMap<usize, f64>, SimError> {
-    let mut map: BTreeMap<usize, f64> = BTreeMap::new();
+) -> Result<Vec<Stimulus>, SimError> {
+    let mut rates: BTreeMap<usize, f64> = BTreeMap::new();
     for item in &program.items {
         if let Item::Stimulus(StimulusDef { layer, model }) = item {
             let idx = *layer_index.get(&layer.name).ok_or_else(|| SimError {
@@ -324,17 +437,23 @@ fn collect_stimuli(
                     rate_to_hz(rate, "Poisson rate").map_err(to_err)?
                 }
             };
-            let entry = map.entry(idx).or_insert(0.0);
-            *entry += rate;
+            *rates.entry(idx).or_insert(0.0) += rate;
         }
     }
-    Ok(map)
+    Ok(rates
+        .into_iter()
+        .map(|(layer, rate_hz)| Stimulus {
+            layer,
+            rate_hz,
+            amplitude: 1.0,
+        })
+        .collect())
 }
 
 fn build_connections(
     program: &Program,
     layer_index: &BTreeMap<String, usize>,
-    layers: &mut [LayerState],
+    layers: &[Layer],
     step_ns: i64,
     seed: u64,
 ) -> Result<(Vec<Connection>, DelayQuantization), SimError> {
@@ -748,6 +867,84 @@ run for 10 ms step 2 ms
         let mut a = Rng::stream(42, stream::STRUCTURE);
         let mut b = Rng::stream(42, stream::STIMULUS);
         assert_ne!(a.next_u64(), b.next_u64());
+    }
+
+    #[test]
+    fn elaborate_then_run_matches_simulate() {
+        let program = parse_program(POISSON).expect("parse");
+        let direct = simulate(&program).expect("sim");
+        let staged = run(&elaborate(&program).expect("elaborate")).expect("run");
+        assert_eq!(direct.total_spikes, staged.total_spikes);
+        assert_eq!(direct.layers[0].windows, staged.layers[0].windows);
+        assert_eq!(direct.layers[1].windows, staged.layers[1].windows);
+    }
+
+    // The seam only earns its keep if a pass can change the network between the halves.
+    #[test]
+    fn a_network_can_be_perturbed_between_the_halves() {
+        let program = parse_program(POISSON).expect("parse");
+        let baseline = run(&elaborate(&program).expect("elaborate")).expect("run");
+
+        let mut net = elaborate(&program).expect("elaborate");
+        for conn in &mut net.connections {
+            for syn_list in &mut conn.synapses {
+                syn_list.clear();
+            }
+        }
+        let ablated = run(&net).expect("run");
+
+        assert!(baseline.layers[1].spikes > 0);
+        assert_eq!(ablated.layers[1].spikes, 0);
+        // Cutting the connection can't change what the stimulated layer did.
+        assert_eq!(ablated.layers[0].spikes, baseline.layers[0].spikes);
+    }
+
+    // The ring is sized inside run, so a pass that lengthens a delay past the original longest
+    // one still gets a buffer big enough to hold it.
+    #[test]
+    fn run_sizes_the_ring_from_the_network_it_is_given() {
+        let program = parse_program(
+            r#"
+neuron LIF { tau_m = 20 ms, v_th = 1.0 }
+layer A[1] : LIF
+layer B[1] : LIF
+connect A -> B { w = 2.0, d = 1 ms }
+stimulus A = Poisson(rate=1 kHz)
+run for 20 ms step 1 ms
+seed 11
+"#,
+        )
+        .expect("parse");
+
+        let mut net = elaborate(&program).expect("elaborate");
+        for conn in &mut net.connections {
+            for syn_list in &mut conn.synapses {
+                for syn in syn_list {
+                    syn.delay_steps = 9;
+                }
+            }
+        }
+        let stretched = run(&net).expect("run");
+        assert!(stretched.layers[1].spikes > 0);
+    }
+
+    #[test]
+    fn windows_account_for_every_spike() {
+        let summary = sim(POISSON);
+        for layer in &summary.layers {
+            assert_eq!(layer.windows.len(), WINDOW_COUNT);
+            assert_eq!(layer.windows.iter().sum::<u64>(), layer.spikes);
+        }
+    }
+
+    #[test]
+    fn windows_cover_the_run_without_gaps_or_overflow() {
+        for steps in [1usize, 3, 16, 17, 100, 1000] {
+            for step in 0..steps {
+                assert!(window_of(step, steps) < WINDOW_COUNT);
+            }
+            assert_eq!(window_of(0, steps), 0);
+        }
     }
 
     #[test]
