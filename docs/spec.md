@@ -23,9 +23,23 @@ v_th  = 1.0 V
 run for 10 ms
 ```
 
-Units are parsed and checked for time and rate contexts.
-Supported time units: `s`, `ms`, `us`, `ns`.
-Supported rate units: `Hz`, `kHz`.
+Units are parsed and checked. A unit belongs to exactly one kind and kinds don't convert into
+each other.
+
+| Kind | Units | Canonical base |
+|---|---|---|
+| time | `s`, `ms`, `us`, `ns` | integer nanoseconds |
+| rate | `Hz`, `kHz` | Hz |
+| voltage | `V`, `mV`, `uV` | volts |
+
+Time and rate positions require a unit. Voltage positions don't: the volt is the canonical
+membrane unit, so a bare number in a voltage position is volts. That's why `v_th = 1000 mV`
+and `v_th = 1.0 V` are the same threshold, and why an unmarked weight doesn't change meaning
+depending on how the threshold next to it was spelled.
+
+Known gap: `w` is added straight into the membrane, so a full dimensional check between a
+weight and a threshold would need a capacitance or a current in the neuron model. Both are
+checked as voltages today and neither is checked against the other.
 
 ## Grammar (subset)
 
@@ -69,11 +83,19 @@ The `check` command enforces:
 
 - Neuron definitions are unique by name.
 - Layer definitions are unique by name.
+- At most one `seed` statement.
+- Exactly one `run` statement.
 - Every `layer ... : NeuronType` refers to a defined `neuron`.
 - Every `connect A -> B` refers to defined `layer`s.
-- `run` duration and step must use time units.
+- Every `stimulus L = ...` refers to a defined `layer`.
+- `run` duration and step must use time units and must be positive.
 - `stimulus` rate must use frequency units.
-- connection delay `d` must use time units when present.
+- `neuron` bodies accept `tau_m` and `v_th`. Any other key is an error.
+- `connect` bodies accept `w` and `d`. Any other key is an error.
+- `tau_m` and connection delay `d` must use time units.
+- `v_th` and connection weight `w` must use voltage units, or no unit at all.
+- `w` and `d` may be a `Normal` or `Uniform` distribution. Every argument is checked against
+  the same kind as the key it belongs to.
 
 Defaults:
 

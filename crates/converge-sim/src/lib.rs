@@ -6,7 +6,7 @@ use std::fmt;
 use converge_lang::ast::{
     Assign, CallArg, ConnectDef, Expr, Item, NeuronDef, Program, StimulusDef, StimulusModel,
 };
-use converge_lang::units::{rate_to_hz, time_to_nanos};
+use converge_lang::units::{UnitKind, rate_to_hz, time_to_nanos, volts};
 
 #[derive(Debug, Clone)]
 pub struct SimSummary {
@@ -353,8 +353,8 @@ fn build_connections(
             message: format!("unknown destination layer `{}`", dst.name),
         })?;
 
-        let weight_dist = find_dist(body, "w", false)?;
-        let delay_dist = find_dist(body, "d", true)?;
+        let weight_dist = find_dist(body, "w", UnitKind::Voltage)?;
+        let delay_dist = find_dist(body, "d", UnitKind::Time)?;
 
         let src_size = layers[src_idx].size;
         let dst_size = layers[dst_idx].size;
@@ -437,7 +437,9 @@ fn lif_params(neuron: &NeuronDef) -> Result<LifParams, SimError> {
             }
             "v_th" => {
                 if let Expr::Number(q) = &assign.value {
-                    v_th = q.value;
+                    // The volt is the canonical membrane unit. A bare number is volts, so
+                    // `1000 mV` and `1 V` land on the same threshold.
+                    v_th = volts(q, "v_th").map_err(to_err)?;
                 } else {
                     return Err(SimError {
                         message: "v_th must be a number".to_string(),
@@ -455,28 +457,30 @@ struct LifParams {
     v_th: f64,
 }
 
-fn find_dist(body: &[Assign], key: &str, is_time: bool) -> Result<Dist, SimError> {
+fn find_dist(body: &[Assign], key: &str, kind: UnitKind) -> Result<Dist, SimError> {
     let expr = body.iter().find(|a| a.key.name == key).map(|a| &a.value);
     match expr {
-        Some(expr) => dist_from_expr(expr, is_time),
-        None => Ok(if is_time {
-            Dist::Const(0.0)
-        } else {
-            Dist::Const(1.0)
+        Some(expr) => dist_from_expr(expr, kind),
+        None => Ok(match kind {
+            // No delay written means deliver as soon as the grid allows, which is one step.
+            UnitKind::Time => Dist::Const(0.0),
+            _ => Dist::Const(1.0),
         }),
     }
 }
 
-fn dist_from_expr(expr: &Expr, is_time: bool) -> Result<Dist, SimError> {
+/// Canonical base per kind: integer nanoseconds for time, volts for a weight.
+fn canonical(q: &converge_lang::ast::Quantity, kind: UnitKind) -> Result<f64, SimError> {
+    match kind {
+        UnitKind::Time => Ok(time_to_nanos(q, "delay").map_err(to_err)? as f64),
+        UnitKind::Voltage => volts(q, "weight").map_err(to_err),
+        UnitKind::Rate => rate_to_hz(q, "rate").map_err(to_err),
+    }
+}
+
+fn dist_from_expr(expr: &Expr, kind: UnitKind) -> Result<Dist, SimError> {
     match expr {
-        Expr::Number(q) => {
-            let value = if is_time {
-                time_to_nanos(q, "delay").map_err(to_err)? as f64
-            } else {
-                q.value
-            };
-            Ok(Dist::Const(value))
-        }
+        Expr::Number(q) => Ok(Dist::Const(canonical(q, kind)?)),
         Expr::Call(call) => {
             let mut args = Vec::new();
             for arg in &call.args {
@@ -485,12 +489,7 @@ fn dist_from_expr(expr: &Expr, is_time: bool) -> Result<Dist, SimError> {
                     CallArg::Named { value, .. } => value,
                 };
                 if let Expr::Number(q) = expr {
-                    let value = if is_time {
-                        time_to_nanos(q, "delay").map_err(to_err)? as f64
-                    } else {
-                        q.value
-                    };
-                    args.push(value);
+                    args.push(canonical(q, kind)?);
                 } else {
                     return Err(SimError {
                         message: "distribution arguments must be numbers".to_string(),
