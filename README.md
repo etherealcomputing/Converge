@@ -43,7 +43,7 @@ flowchart LR
   E --> E4["hw targets (THOR / SpiNNaker2 / BrainScaleS-2)"]
 ```
 
-Today you’ve got the front end plus a validator and a CVIR JSON emitter. Next you’ll get a deterministic simulator core then an interchange pipeline and finally hardware codegen.
+Today you’ve got the front end plus a validator, a CVIR JSON emitter, a deterministic simulator and a fault sweep that reports a failure envelope. Next comes an interchange pipeline and after that hardware codegen.
 
 ## Quick start
 
@@ -51,10 +51,11 @@ You need Rust stable. Minimum supported Rust is 1.92.
 
 ```bash
 cargo test
-cargo run -p converge-cli -- check examples/hello.cv
-cargo run -p converge-cli -- ast   examples/hello.cv
-cargo run -p converge-cli -- cvir  examples/hello.cv
-cargo run -p converge-cli -- sim   examples/poisson.cv
+cargo run -p converge-cli -- check   examples/hello.cv
+cargo run -p converge-cli -- ast     examples/hello.cv
+cargo run -p converge-cli -- cvir    examples/hello.cv
+cargo run -p converge-cli -- sim     examples/poisson.cv
+cargo run -p converge-cli -- perturb examples/envelope.cv
 ```
 
 ## Docs
@@ -62,9 +63,10 @@ cargo run -p converge-cli -- sim   examples/poisson.cv
 1. `docs/spec.md` current accepted grammar and validation rules
 2. `docs/semantics.md` time model and determinism rules
 3. `docs/cvir.md` canonical IR schema and examples
-4. `docs/references.md` curated anchors for hardware and interchange
-5. `docs/voice.md` writing rules for project docs
-6. `docs/brand.md` logo and asset guidance
+4. `docs/perturbation.md` fault operators, invariants and the failure envelope
+5. `docs/references.md` curated anchors for hardware and interchange
+6. `docs/voice.md` writing rules for project docs
+7. `docs/brand.md` logo and asset guidance
 
 ## Origin
 
@@ -76,7 +78,7 @@ Read `CONTRIBUTING.md` then pick something small and make it sharp. If you add s
 
 ## Security
 
-Read `SECURITY.md` for reporting. Converge will support defensive robustness testing and fault injection. It won’t ship offense code.
+Read `SECURITY.md` for reporting. Converge supports defensive robustness testing and fault injection against its own artifacts; see `docs/perturbation.md`. It won’t ship offense code.
 
 ## License and contact
 
